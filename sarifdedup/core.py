@@ -18,50 +18,50 @@ class Result:
         self.message = message
         self.uri = uri
         self.line = line
+        self.suppressed = False
 
 
 class Report:
     def __init__(self):
         self.results = []
         self.suppressed = []
+        self._index = {}
 
 
 def fingerprint_of(raw, counter):
     counter.scanned += 1
-    return raw.get("ruleId", "") + "|" + raw.get("uri", "")
+    partial = raw.get("partialFingerprints") or {}
+    if partial.get("primary"):
+        return partial["primary"]
+    return "%s|%s|%s" % (raw.get("ruleId", ""), raw.get("uri", ""), raw.get("line", 0))
 
 
 def dedup(raws, baseline, always_report, counter):
     report = Report()
     for raw in raws:
         counter.scanned += 1
-        uri = raw.get("uri", "")
-        if not uri:
-            continue
         fp = fingerprint_of(raw, counter)
-        found = None
-        for item in report.results:
-            counter.scanned += 1
-            if item.fingerprint == fp:
-                found = item
+        found = report._index.get(fp)
         if found is None:
             found = Result(fp, raw.get("ruleId", ""), raw.get("level", "note"),
-                           raw.get("message", ""), uri, raw.get("line", 0))
-            if fp in baseline:
+                           raw.get("message", ""), raw.get("uri", ""), raw.get("line", 0))
+            if fp in baseline and found.rule_id not in always_report:
+                found.suppressed = True
                 report.suppressed.append(found)
             else:
                 report.results.append(found)
+            report._index[fp] = found
         else:
-            if RANK.get(found.level, 0) >= RANK.get(raw.get("level", "note"), 0):
+            if RANK.get(raw.get("level", "note"), 0) > RANK.get(found.level, 0):
                 found.level = raw.get("level", "note")
             found.message = raw.get("message", "")
-        found.line = raw.get("line", 0)
+            found.line = raw.get("line", 0)
     return report
 
 
 def lookup(report, fp, counter):
-    for item in report.results:
-        counter.scanned += 1
-        if item.fingerprint == fp:
-            return item
-    return None
+    counter.scanned += 1
+    item = report._index.get(fp)
+    if item is None or item.suppressed:
+        return None
+    return item
